@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from google.adk.agents import LlmAgent
 
+from .callbacks import gate_nurse_transfer
 from .medgemma_llm import MedGemmaLlm
 from .prompts import (
     DOCTOR_INSTRUCTION,
@@ -60,6 +61,10 @@ nurse_agent = LlmAgent(
     model=_llm,
     instruction=NURSE_INSTRUCTION,
     sub_agents=[doctor_agent],
+    # Hard guard: if the model tries to transfer before all required triage
+    # items (including numeric vitals) are present in the message, strip the
+    # transfer call and force it to keep asking.
+    after_model_callback=gate_nurse_transfer,
 )
 
 
