@@ -1,4 +1,4 @@
-"""Custom ADK BaseLlm wrapper around google/medgemma-1.5-4b-it.
+"""Custom ADK BaseLlm wrapper around google/medgemma-1.5-4b-it. 
 
 Loads the model once per process (singleton) and shares it across all
 agents in the urgent-care app. Translates ADK's LlmRequest into the
@@ -82,8 +82,14 @@ def _system_text(llm_request: LlmRequest) -> Optional[str]:
 def _content_to_messages(
     contents: list[genai_types.Content], system_text: Optional[str]
 ) -> list[dict]:
-    """Convert ADK Content list to gemma3 chat-template messages."""
-    messages: list[dict] = []
+    """Convert ADK Content list to gemma3 chat-template messages.
+
+    Gemma3's chat template strictly requires user/assistant alternation and a
+    leading user turn. ADK normally produces this, but transfers add a
+    function_response turn that can land next to a user turn, and tool-only
+    turns can collapse to empty content. We normalize all of that here.
+    """
+    raw: list[dict] = []
     for c in contents or []:
         role = "assistant" if c.role == "model" else "user"
         out_content: list[dict] = []
@@ -117,19 +123,37 @@ def _content_to_messages(
                     }
                 )
         if out_content:
-            messages.append({"role": role, "content": out_content})
+            raw.append({"role": role, "content": out_content})
 
-    # Gemma3's chat template does not consistently accept a `system` role,
-    # so prepend the system text to the first user turn for compatibility.
+    # Merge consecutive same-role messages so user/assistant strictly alternate.
+    merged: list[dict] = []
+    for m in raw:
+        if merged and merged[-1]["role"] == m["role"]:
+            merged[-1]["content"] = merged[-1]["content"] + m["content"]
+        else:
+            merged.append(m)
+
+    # Inject system text at the head of the first user turn (gemma3's template
+    # does not consistently accept a `system` role).
     if system_text:
         injected = {"type": "text", "text": system_text}
-        for i, m in enumerate(messages):
+        for m in merged:
             if m["role"] == "user":
                 m["content"] = [injected] + m["content"]
                 break
         else:
-            messages.insert(0, {"role": "user", "content": [injected]})
-    return messages
+            merged.insert(0, {"role": "user", "content": [injected]})
+
+    # Gemma3 requires the conversation to start with a user turn.
+    if merged and merged[0]["role"] != "user":
+        merged.insert(
+            0,
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "(begin consultation)"}],
+            },
+        )
+    return merged
 
 
 def _split_transfer(text: str) -> tuple[str, Optional[str]]:
