@@ -32,6 +32,10 @@ _VITAL_PATTERNS: list[re.Pattern] = [
     re.compile(r"\bpain\b[^A-Za-z\n]{0,40}\d", re.IGNORECASE),
 ]
 _HEADER_RE = re.compile(r"triage\s+summary", re.IGNORECASE)
+# Gemma3 emits thought-delimiter tokens like `<unused94>` / `<unused95>` that
+# leak through `skip_special_tokens=True`. Strip them before the placeholder
+# scan so they aren't mistaken for unfilled template fields.
+_GEMMA_THOUGHT_TOK_RE = re.compile(r"<\s*unused\d+\s*>", re.IGNORECASE)
 # A placeholder like "<...>" or "<n>" inside the supposed summary means the
 # nurse hallucinated values it doesn't have.
 _PLACEHOLDER_RE = re.compile(r"<\s*[^>]{0,30}\s*>")
@@ -58,7 +62,8 @@ def _has_transfer_call(response: LlmResponse) -> bool:
 def _triage_complete(text: str) -> bool:
     if not _HEADER_RE.search(text):
         return False
-    if _PLACEHOLDER_RE.search(text):
+    scrub = _GEMMA_THOUGHT_TOK_RE.sub("", text)
+    if _PLACEHOLDER_RE.search(scrub):
         return False
     return all(p.search(text) for p in _VITAL_PATTERNS)
 
