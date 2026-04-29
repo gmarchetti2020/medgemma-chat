@@ -46,8 +46,13 @@ doctor_agent = LlmAgent(
     model=_llm,
     instruction=DOCTOR_INSTRUCTION,
     sub_agents=[radiologist_agent],
-    # The doctor must not bounce back to the nurse - triage is one-way.
-    disallow_transfer_to_parent=True,
+    # NOTE: We deliberately do NOT set `disallow_transfer_to_parent=True` on
+    # the doctor. ADK's runner uses that same flag to decide whether an agent
+    # can be picked as the active agent across user turns
+    # (`_is_transferable_across_agent_tree`); setting it would force ADK to
+    # fall back to the root (nurse) on every turn after the hand-off, and the
+    # doctor + radiologist would never get a turn of their own. We enforce
+    # "triage never reverses" via the doctor's prompt instead.
 )
 
 

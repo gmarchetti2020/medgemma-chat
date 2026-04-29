@@ -33,8 +33,15 @@ _VITAL_PATTERNS: list[re.Pattern] = [
 ]
 _HEADER_RE = re.compile(r"triage\s+summary", re.IGNORECASE)
 # Gemma3 emits thought-delimiter tokens like `<unused94>` / `<unused95>` that
-# leak through `skip_special_tokens=True`. Strip them before the placeholder
-# scan so they aren't mistaken for unfilled template fields.
+# leak through `skip_special_tokens=True`. The thought block between them
+# routinely contains the model echoing its own system prompt (with template
+# placeholders like `<name>`, `<bpm>`, `<n>` etc.). We must strip the entire
+# block before the placeholder scan, otherwise the gate sees template
+# placeholders that aren't actually in the user-facing summary.
+_GEMMA_THOUGHT_BLOCK_RE = re.compile(
+    r"<\s*unused94\s*>.*?(?:<\s*unused95\s*>|$)",
+    re.IGNORECASE | re.DOTALL,
+)
 _GEMMA_THOUGHT_TOK_RE = re.compile(r"<\s*unused\d+\s*>", re.IGNORECASE)
 # A placeholder like "<...>" or "<n>" inside the supposed summary means the
 # nurse hallucinated values it doesn't have.
@@ -49,23 +56,29 @@ def _join_text(response: LlmResponse) -> str:
     )
 
 
-def _has_transfer_call(response: LlmResponse) -> bool:
+def _has_transfer_call(response: LlmResponse, target: str = "doctor") -> bool:
     if not response.content or not response.content.parts:
         return False
     for p in response.content.parts:
         fc = getattr(p, "function_call", None)
         if fc is not None and fc.name == "transfer_to_agent":
-            return True
+            args = dict(fc.args or {})
+            if args.get("agent_name") == target:
+                return True
     return False
 
 
 def _triage_complete(text: str) -> bool:
-    if not _HEADER_RE.search(text):
+    # Strip Gemma3 thought blocks (and any stray bare tokens) before checks -
+    # the thought block is not user-facing and routinely echoes the system
+    # prompt's template placeholders.
+    scrub = _GEMMA_THOUGHT_BLOCK_RE.sub("", text)
+    scrub = _GEMMA_THOUGHT_TOK_RE.sub("", scrub)
+    if not _HEADER_RE.search(scrub):
         return False
-    scrub = _GEMMA_THOUGHT_TOK_RE.sub("", text)
     if _PLACEHOLDER_RE.search(scrub):
         return False
-    return all(p.search(text) for p in _VITAL_PATTERNS)
+    return all(p.search(scrub) for p in _VITAL_PATTERNS)
 
 
 def gate_nurse_transfer(callback_context, llm_response: LlmResponse) -> Optional[LlmResponse]:
@@ -74,20 +87,23 @@ def gate_nurse_transfer(callback_context, llm_response: LlmResponse) -> Optional
     Returns a modified response when the nurse tried to transfer without a
     complete triage summary. Returns None to leave the response untouched.
     """
-    if not _has_transfer_call(llm_response):
+    if not _has_transfer_call(llm_response, target="doctor"):
         return None
 
     text = _join_text(llm_response)
     if _triage_complete(text):
         return None
 
-    # Drop the function_call, keep any text the nurse produced, and append a
-    # self-correction so the next user turn naturally continues the triage.
+    # Drop only the doctor-targeted transfer call. Keep any text and any other
+    # function calls (the nurse should not be issuing those, but we don't want
+    # to be over-aggressive).
     kept_parts = []
     for p in llm_response.content.parts:
         fc = getattr(p, "function_call", None)
         if fc is not None and fc.name == "transfer_to_agent":
-            continue
+            args = dict(fc.args or {})
+            if args.get("agent_name") == "doctor":
+                continue
         kept_parts.append(p)
     if not kept_parts:
         kept_parts = [genai_types.Part(text="")]

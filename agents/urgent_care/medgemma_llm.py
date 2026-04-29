@@ -23,8 +23,11 @@ from PIL import Image
 
 MODEL_ID = os.environ.get("MEDGEMMA_MODEL_ID", "google/medgemma-1.5-4b-it")
 TRANSFER_RE = re.compile(r"\[\[\s*TRANSFER\s*:\s*([A-Za-z0-9_\-]+)\s*\]\]")
-DEFAULT_MAX_NEW_TOKENS = int(os.environ.get("MEDGEMMA_MAX_NEW_TOKENS", "1024"))
+DEFAULT_MAX_NEW_TOKENS = int(os.environ.get("MEDGEMMA_MAX_NEW_TOKENS", "3072"))
 DEFAULT_TEMPERATURE = float(os.environ.get("MEDGEMMA_TEMPERATURE", "0.7"))
+DEFAULT_REPETITION_PENALTY = float(
+    os.environ.get("MEDGEMMA_REPETITION_PENALTY", "1.1")
+)
 
 
 class _ModelHolder:
@@ -133,8 +136,8 @@ def _content_to_messages(
         else:
             merged.append(m)
 
-    # Inject system text at the head of the first user turn (gemma3's template
-    # does not consistently accept a `system` role).
+    # Inject the full system text at the head of the FIRST user turn
+    # (gemma3's template does not consistently accept a `system` role).
     if system_text:
         injected = {"type": "text", "text": system_text}
         for m in merged:
@@ -196,12 +199,34 @@ class MedGemmaLlm(BaseLlm):
         inputs = {k: v.to(device) for k, v in inputs.items()}
 
         do_sample = DEFAULT_TEMPERATURE > 0
+        # Stop strings cut off the spew the 4B model produces after its real
+        # answer at large token budgets - it likes to hallucinate the next
+        # user / nurse turn ("For context:[nurse] said:", "**Patient:**", a
+        # second `<unused94>thought` block). Stopping at those markers ends
+        # the turn at the genuine response.
+        stop_strings = [
+            "For context:",
+            "[nurse] said:",
+            "[doctor] said:",
+            "[radiologist] said:",
+            "**Patient:**",
+        ]
         with torch.inference_mode():
             generated = model_obj.generate(
                 **inputs,
                 max_new_tokens=DEFAULT_MAX_NEW_TOKENS,
                 do_sample=do_sample,
                 temperature=DEFAULT_TEMPERATURE if do_sample else 1.0,
+                # The 4B model occasionally slides into a degenerate loop
+                # (repeating the same checklist paragraph until it hits
+                # max_new_tokens) when the conversation history is long.
+                # A mild repetition penalty curbs this without distorting
+                # output style; no_repeat_ngram_size catches near-repeats
+                # the penalty alone misses.
+                repetition_penalty=DEFAULT_REPETITION_PENALTY,
+                no_repeat_ngram_size=14,
+                stop_strings=stop_strings,
+                tokenizer=processor.tokenizer,
             )
         prompt_len = inputs["input_ids"].shape[1]
         completion = processor.batch_decode(
