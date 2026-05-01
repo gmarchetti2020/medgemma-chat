@@ -10,17 +10,22 @@ from __future__ import annotations
 
 from google.adk.agents import LlmAgent
 
-from .callbacks import gate_nurse_transfer
+from .callbacks import (
+    doctor_handoff_filter,
+    gate_nurse_transfer,
+    radiologist_handoff_filter,
+)
 from .medgemma_llm import MedGemmaLlm
 from .prompts import (
     DOCTOR_INSTRUCTION,
     NURSE_INSTRUCTION,
     RADIOLOGIST_INSTRUCTION,
 )
+from .tools import get_patient_vitals, upload_chest_xray
 
 # A single MedGemmaLlm instance is shared across all three agents. The model
 # weights themselves live in a process-wide singleton (see medgemma_llm.py),
-# so we never load the 4B model more than once.
+# so we never load them more than once.
 _llm = MedGemmaLlm()
 
 
@@ -33,6 +38,8 @@ radiologist_agent = LlmAgent(
     ),
     model=_llm,
     instruction=RADIOLOGIST_INSTRUCTION,
+    tools=[upload_chest_xray],
+    before_model_callback=radiologist_handoff_filter,
 )
 
 
@@ -46,6 +53,7 @@ doctor_agent = LlmAgent(
     model=_llm,
     instruction=DOCTOR_INSTRUCTION,
     sub_agents=[radiologist_agent],
+    before_model_callback=doctor_handoff_filter,
     # NOTE: We deliberately do NOT set `disallow_transfer_to_parent=True` on
     # the doctor. ADK's runner uses that same flag to decide whether an agent
     # can be picked as the active agent across user turns
@@ -66,6 +74,7 @@ nurse_agent = LlmAgent(
     model=_llm,
     instruction=NURSE_INSTRUCTION,
     sub_agents=[doctor_agent],
+    tools=[get_patient_vitals],
     # Hard guard: if the model tries to transfer before all required triage
     # items (including numeric vitals) are present in the message, strip the
     # transfer call and force it to keep asking.
