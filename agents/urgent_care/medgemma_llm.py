@@ -51,6 +51,13 @@ class _ModelHolder:
                     if torch.cuda.is_available():
                         dtype = torch.bfloat16
                         device_map = "auto"
+                    elif (
+                        hasattr(torch, "backends")
+                        and hasattr(torch.backends, "mps")
+                        and torch.backends.mps.is_available()
+                    ):
+                        dtype = torch.float16
+                        device_map = "mps"
                     else:
                         dtype = torch.float32
                         device_map = None
