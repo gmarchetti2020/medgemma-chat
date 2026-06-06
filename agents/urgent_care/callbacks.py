@@ -134,7 +134,7 @@ def gate_nurse_transfer(callback_context, llm_response: LlmResponse) -> Optional
 # jumps straight to imaging on its very first turn, before taking any focused
 # history. Each unit is one doctor-authored, patient-facing message already on
 # record, so a value of 2 forces roughly two history exchanges (e.g. HPI then
-# PMH/social) before a chest X-ray can be ordered.
+# PMH/social) before any imaging can be ordered.
 _MIN_DOCTOR_HISTORY_TURNS = 2
 
 
@@ -262,48 +262,34 @@ def _build_nurse_to_doctor_handoff(pre_events) -> str:
 def _build_doctor_to_radiologist_handoff(pre_events) -> str:
     """Compact referral note for the radiologist's input.
 
-    The doctor's verbatim text often contains its own self-dialogue and
-    template-style placeholders that derail the 4B radiologist into
-    producing JSON-shaped gibberish. We drop that text and synthesize a
-    standardized chest-imaging referral from the patient's chief complaint.
+    We drop the doctor's earlier deliberation but keep its referral message,
+    which states the ordered study (the modality may be any X-ray, ultrasound,
+    CT, or MRI) and the clinical question. That, plus the patient's verbatim
+    statements, is everything the radiologist needs.
     """
-    user_dialogue = _collect_user_dialogue(pre_events)
-    chief_complaint = next(
-        (
-            line
-            for line in user_dialogue
-            if any(
-                kw in line.lower()
-                for kw in (
-                    "cough",
-                    "chest",
-                    "breath",
-                    "pain",
-                    "fever",
-                    "wheeze",
-                    "sputum",
-                )
-            )
-        ),
-        None,
-    )
+    referral = _last_text_from_author(pre_events, "doctor")
 
     lines = [
         "[Physician referral to radiologist]",
         "",
-        "The urgent-care physician has referred this patient for a chest "
-        "radiograph as part of a respiratory work-up.",
-        "",
     ]
-    if chief_complaint:
-        lines.append(f"Chief complaint (verbatim): {chief_complaint}")
+    if referral:
+        lines.append(
+            "Referring physician's note (states the study requested - the "
+            "modality and body region - and the clinical question):"
+        )
+        lines.append(referral)
+        lines.append("")
+    else:
+        lines.append("The urgent-care physician has referred this patient for imaging.")
         lines.append("")
     lines.append(
-        "You are the radiologist. Ask the patient to upload the most recent "
-        "chest study with the "
-        "upload_chest_xray tool, read the image once it appears in the next "
-        "turn, write a structured RADIOLOGY REPORT in plain text (NOT JSON), "
-        "and transfer back to the doctor."
+        "You are the radiologist. Identify the study the physician ordered "
+        "(any X-ray, ultrasound, CT, or MRI). Ask the patient to upload that "
+        "study "
+        "with the upload_imaging_study tool, read the image once it appears in "
+        "the next turn, write a structured RADIOLOGY REPORT in plain text (NOT "
+        "JSON) appropriate to the modality, and transfer back to the doctor."
     )
     return "\n".join(lines)
 

@@ -5,10 +5,11 @@ vitals monitor at the bedside and an imaging modality in the radiology
 suite. Neither is connected in this deployment, so instead of fabricating
 data these tools ask the patient to supply it directly - the nurse's tool
 prompts the patient to type their vital signs, and the radiologist's tool
-prompts the patient to upload their chest radiograph. The agent relays the
-request, the patient responds on the next turn, and the agent reads the
-values / image out of the conversation. In a future robotic deployment
-these tools would instead talk to the actual hardware.
+prompts the patient to upload the imaging study the physician ordered (any
+X-ray, ultrasound, CT, or MRI). The agent relays the request, the patient
+responds on the next turn, and the agent reads the values / image out of the
+conversation. In a future robotic deployment these tools would instead talk
+to the actual hardware.
 """
 from __future__ import annotations
 
@@ -45,22 +46,25 @@ def get_patient_vitals() -> dict[str, Any]:
     }
 
 
-def upload_chest_xray() -> dict[str, Any]:
-    """Request the patient to upload their chest radiograph.
+def upload_imaging_study() -> dict[str, Any]:
+    """Request the patient to upload the imaging study the physician ordered.
 
     No imaging modality is wired into this room, so this tool does NOT return
     an image. It returns instructions telling you to ask the patient to
-    upload their most recent chest X-ray (or other requested study) as an
-    image attachment. Once the patient attaches it, the image appears inline
-    in the conversation and you can read it directly on the next turn.
+    upload the study the physician requested - any X-ray, ultrasound, CT, or MRI
+    of the relevant body region - as an image attachment. Once the patient
+    attaches it, the image appears inline in the conversation and you can read
+    it directly on the next turn.
     """
     return {
         "status": "upload_required",
         "instructions": (
-            "No imaging modality is connected. Ask the patient to upload "
-            "their most recent chest X-ray using the image / attachment "
-            "button. Once the image appears in the conversation, read it and "
-            "write your report. If the patient provides no image, say you "
-            "cannot report without one."
+            "No imaging modality is connected. Ask the patient to upload the "
+            "study the physician ordered - state the modality and body region "
+            "the doctor requested (e.g. an X-ray, ultrasound, CT, or MRI of the "
+            "relevant area) - using the image / attachment button. Once the "
+            "image appears in the conversation, read it and write your report. "
+            "If the patient provides no image, say you cannot report without "
+            "one."
         ),
     }

@@ -22,7 +22,7 @@ from .prompts import (
     NURSE_INSTRUCTION,
     RADIOLOGIST_INSTRUCTION,
 )
-from .tools import get_patient_vitals, upload_chest_xray
+from .tools import get_patient_vitals, upload_imaging_study
 
 # A single MedGemmaLlm instance is shared across all three agents. The model
 # weights themselves live in a process-wide singleton (see medgemma_llm.py),
@@ -33,13 +33,14 @@ _llm = MedGemmaLlm()
 radiologist_agent = LlmAgent(
     name="radiologist",
     description=(
-        "Radiologist who reviews uploaded chest X-rays, abdominal films, or "
-        "CT slices and produces a structured radiology report for the "
-        "referring physician."
+        "Radiologist who reviews uploaded imaging studies - any X-ray, "
+        "ultrasound, CT, or MRI - and produces a structured radiology report "
+        "for "
+        "the referring physician."
     ),
     model=_llm,
     instruction=RADIOLOGIST_INSTRUCTION,
-    tools=[upload_chest_xray],
+    tools=[upload_imaging_study],
     before_model_callback=radiologist_handoff_filter,
 )
 
