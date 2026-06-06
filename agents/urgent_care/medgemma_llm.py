@@ -134,11 +134,11 @@ def _content_to_messages(
                 )
             elif getattr(p, "function_response", None) is not None:
                 fr = p.function_response
-                # Tool stubs that produce an image (e.g. `upload_chest_xray`)
-                # smuggle the local file path back via an `_image_path` key
-                # in the response dict. Pop it out, render the rest as text
-                # for the transcript, and inline the image so the model can
-                # actually see it on the next turn.
+                # Defensive: if a tool ever smuggles a local image back via an
+                # `_image_path` key in its response dict, pop it out, render
+                # the rest as text for the transcript, and inline the image so
+                # the model can see it. (Patient-uploaded images arrive as
+                # inline_data parts instead and are handled above.)
                 response = fr.response
                 image_path: Optional[str] = None
                 if isinstance(response, dict) and "_image_path" in response:

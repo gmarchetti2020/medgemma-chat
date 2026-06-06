@@ -1,53 +1,66 @@
-"""Stub tools that stand in for physical bedside hardware.
+"""Tools that solicit real input from the patient.
 
 The triage nurse and the radiologist normally rely on real devices: a
 vitals monitor at the bedside and an imaging modality in the radiology
-suite. In this simulation neither exists, so rather than asking the
-patient to type numbers or upload files we expose stub tools that return
-plausible canned data. In a future robotic deployment these stubs would
-be replaced by drivers that talk to the actual hardware.
+suite. Neither is connected in this deployment, so instead of fabricating
+data these tools ask the patient to supply it directly - the nurse's tool
+prompts the patient to type their vital signs, and the radiologist's tool
+prompts the patient to upload their chest radiograph. The agent relays the
+request, the patient responds on the next turn, and the agent reads the
+values / image out of the conversation. In a future robotic deployment
+these tools would instead talk to the actual hardware.
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
-
-# Sample chest radiograph bundled with the repo. Used as the canned
-# return value for `upload_chest_xray`.
-_XRAY_PATH = (
-    Path(__file__).resolve().parent.parent.parent / "pleural_effusion.png"
-)
 
 
 def get_patient_vitals() -> dict[str, Any]:
-    """Read the patient's current vital signs from the bedside monitor.
+    """Request the patient's vital signs for manual entry.
 
-    Use this instead of asking the patient to type values. Returns blood
-    pressure, heart rate, respiratory rate, temperature, oxygen saturation
-    on room air, and pain score - the standard urgent-care vitals set.
+    The bedside monitor is not connected, so this tool does NOT return
+    readings. It returns instructions telling you to ask the patient to read
+    each value off their home devices (BP cuff, thermometer, pulse oximeter)
+    and type it in. Record the numbers the patient provides; never invent
+    them.
     """
-    # Numbers consistent with community-acquired pneumonia: febrile,
-    # tachycardic, tachypneic, mildly hypoxemic, low-normal blood
-    # pressure, pleuritic chest discomfort.
     return {
-        "blood_pressure_mmHg": "108/68",
-        "heart_rate_bpm": 112,
-        "respiratory_rate_per_min": 26,
-        "temperature_C": 38.9,
-        "spo2_percent_room_air": 91,
-        "pain_score_0_10": 4,
+        "status": "manual_entry_required",
+        "instructions": (
+            "The bedside monitor is offline. Ask the patient to provide each "
+            "of the following and type the values back to you: blood pressure "
+            "(systolic/diastolic, mmHg), heart rate (bpm), respiratory rate "
+            "(breaths/min), temperature (°C), oxygen saturation (% on room "
+            "air), and pain score (0-10). If the patient cannot measure a "
+            "value, record 'not available'."
+        ),
+        "required_fields": [
+            "blood_pressure_mmHg",
+            "heart_rate_bpm",
+            "respiratory_rate_per_min",
+            "temperature_C",
+            "spo2_percent_room_air",
+            "pain_score_0_10",
+        ],
     }
 
 
 def upload_chest_xray() -> dict[str, Any]:
-    """Pull the patient's most recent chest radiograph from the imaging suite.
+    """Request the patient to upload their chest radiograph.
 
-    Use this instead of asking the patient to upload a file. The image
-    itself is surfaced into the conversation as an inline picture (via the
-    `_image_path` key), so the radiologist can read it directly on the
-    next turn.
+    No imaging modality is wired into this room, so this tool does NOT return
+    an image. It returns instructions telling you to ask the patient to
+    upload their most recent chest X-ray (or other requested study) as an
+    image attachment. Once the patient attaches it, the image appears inline
+    in the conversation and you can read it directly on the next turn.
     """
     return {
-        "study": "PA chest radiograph",
-        "_image_path": str(_XRAY_PATH),
+        "status": "upload_required",
+        "instructions": (
+            "No imaging modality is connected. Ask the patient to upload "
+            "their most recent chest X-ray using the image / attachment "
+            "button. Once the image appears in the conversation, read it and "
+            "write your report. If the patient provides no image, say you "
+            "cannot report without one."
+        ),
     }

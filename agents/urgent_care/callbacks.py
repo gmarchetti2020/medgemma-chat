@@ -88,54 +88,19 @@ def _triage_complete(text: str) -> bool:
     return all(p.search(scrub) for p in _VITAL_PATTERNS)
 
 
-def _vitals_tool_response_in_session(callback_context) -> bool:
-    """Has `get_patient_vitals` already returned real numbers in this session?
-
-    The 4B model often runs out of token budget after the tool result lands
-    and never produces a clean TRIAGE SUMMARY block in a single response,
-    even though every numeric vital is sitting in conversation history. The
-    tool itself guarantees the numbers are real (no patient hallucination),
-    so once we see its response with the expected keys we can safely permit
-    the transfer.
-    """
-    session = getattr(callback_context, "session", None)
-    if session is None:
-        return False
-    expected_keys = {
-        "blood_pressure_mmHg",
-        "heart_rate_bpm",
-        "respiratory_rate_per_min",
-        "temperature_C",
-        "spo2_percent_room_air",
-    }
-    for ev in getattr(session, "events", []) or []:
-        content = getattr(ev, "content", None)
-        if not content or not getattr(content, "parts", None):
-            continue
-        for p in content.parts:
-            fr = getattr(p, "function_response", None)
-            if fr is None or fr.name != "get_patient_vitals":
-                continue
-            resp = fr.response
-            if isinstance(resp, dict) and expected_keys.issubset(resp.keys()):
-                return True
-    return False
-
-
 def gate_nurse_transfer(callback_context, llm_response: LlmResponse) -> Optional[LlmResponse]:
     """Block premature nurse->doctor transfers.
 
     Returns a modified response when the nurse tried to transfer without a
-    complete triage summary AND no successful vitals tool call is on record.
-    Returns None to leave the response untouched.
+    complete triage summary (vitals are entered manually by the patient, so
+    the gate verifies the summary text carries real numeric values rather
+    than placeholders). Returns None to leave the response untouched.
     """
     if not _has_transfer_call(llm_response, target="doctor"):
         return None
 
     text = _join_text(llm_response)
     if _triage_complete(text):
-        return None
-    if _vitals_tool_response_in_session(callback_context):
         return None
 
     # Drop only the doctor-targeted transfer call. Keep any text and any other
@@ -254,21 +219,6 @@ def _collect_user_dialogue(events) -> list[str]:
     return out
 
 
-def _collect_vitals(events) -> Optional[dict]:
-    """Most recent successful `get_patient_vitals` response in `events`."""
-    last: Optional[dict] = None
-    for ev in events:
-        c = getattr(ev, "content", None)
-        if not c or not getattr(c, "parts", None):
-            continue
-        for p in c.parts:
-            fr = getattr(p, "function_response", None)
-            if fr is not None and fr.name == "get_patient_vitals":
-                if isinstance(fr.response, dict):
-                    last = fr.response
-    return last
-
-
 def _last_text_from_author(events, author: str) -> Optional[str]:
     """Concatenated text of the most recent event authored by `author`."""
     last: Optional[str] = None
@@ -287,11 +237,11 @@ def _last_text_from_author(events, author: str) -> Optional[str]:
 def _build_nurse_to_doctor_handoff(pre_events) -> str:
     """Compact summary of the nurse's session for the doctor's input."""
     user_dialogue = _collect_user_dialogue(pre_events)
-    vitals = _collect_vitals(pre_events) or {}
     lines = [
         "[Nurse handoff to physician]",
         "",
-        "Patient statements (verbatim, in chronological order):",
+        "Patient statements (verbatim, in chronological order). The patient's "
+        "manually entered vital signs are among these statements:",
     ]
     if user_dialogue:
         for utterance in user_dialogue:
@@ -299,11 +249,6 @@ def _build_nurse_to_doctor_handoff(pre_events) -> str:
     else:
         lines.append("- (no patient statements on record)")
     lines.append("")
-    if vitals:
-        lines.append("Vital signs (read from the bedside monitor):")
-        for k, v in vitals.items():
-            lines.append(f"- {k}: {v}")
-        lines.append("")
     lines.append(
         "You are the urgent-care physician. Acknowledge the patient by "
         "name, take a focused HPI/PMH, build a brief differential, refer "
@@ -320,10 +265,8 @@ def _build_doctor_to_radiologist_handoff(pre_events) -> str:
     The doctor's verbatim text often contains its own self-dialogue and
     template-style placeholders that derail the 4B radiologist into
     producing JSON-shaped gibberish. We drop that text and synthesize a
-    standardized chest-imaging referral from the patient's chief complaint
-    and vitals - the only modality our stub serves is a chest radiograph.
+    standardized chest-imaging referral from the patient's chief complaint.
     """
-    vitals = _collect_vitals(pre_events) or {}
     user_dialogue = _collect_user_dialogue(pre_events)
     chief_complaint = next(
         (
@@ -355,13 +298,9 @@ def _build_doctor_to_radiologist_handoff(pre_events) -> str:
     if chief_complaint:
         lines.append(f"Chief complaint (verbatim): {chief_complaint}")
         lines.append("")
-    if vitals:
-        lines.append("Patient vitals at intake:")
-        for k, v in vitals.items():
-            lines.append(f"- {k}: {v}")
-        lines.append("")
     lines.append(
-        "You are the radiologist. Pull the most recent chest study with the "
+        "You are the radiologist. Ask the patient to upload the most recent "
+        "chest study with the "
         "upload_chest_xray tool, read the image once it appears in the next "
         "turn, write a structured RADIOLOGY REPORT in plain text (NOT JSON), "
         "and transfer back to the doctor."
