@@ -12,6 +12,7 @@ from google.adk.agents import LlmAgent
 
 from .callbacks import (
     doctor_handoff_filter,
+    gate_doctor_referral,
     gate_nurse_transfer,
     radiologist_handoff_filter,
 )
@@ -54,6 +55,10 @@ doctor_agent = LlmAgent(
     instruction=DOCTOR_INSTRUCTION,
     sub_agents=[radiologist_agent],
     before_model_callback=doctor_handoff_filter,
+    # Hard guard: block referral to the radiologist until the doctor has taken
+    # a focused history. Without this the 27B model refers for imaging on its
+    # very first turn, before any workup.
+    after_model_callback=gate_doctor_referral,
     # NOTE: We deliberately do NOT set `disallow_transfer_to_parent=True` on
     # the doctor. ADK's runner uses that same flag to decide whether an agent
     # can be picked as the active agent across user turns

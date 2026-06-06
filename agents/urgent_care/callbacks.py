@@ -164,6 +164,76 @@ def gate_nurse_transfer(callback_context, llm_response: LlmResponse) -> Optional
     )
 
 
+# Minimum number of prior doctor dialogue turns required before the doctor is
+# allowed to refer the patient to the radiologist. The 27B model otherwise
+# jumps straight to imaging on its very first turn, before taking any focused
+# history. Each unit is one doctor-authored, patient-facing message already on
+# record, so a value of 2 forces roughly two history exchanges (e.g. HPI then
+# PMH/social) before a chest X-ray can be ordered.
+_MIN_DOCTOR_HISTORY_TURNS = 2
+
+
+def _count_author_text_turns(session, author: str) -> int:
+    """Number of events authored by `author` that carry user-facing text."""
+    n = 0
+    for ev in getattr(session, "events", []) or []:
+        if getattr(ev, "author", None) != author:
+            continue
+        c = getattr(ev, "content", None)
+        if not c or not getattr(c, "parts", None):
+            continue
+        if any(getattr(p, "text", None) and p.text.strip() for p in c.parts):
+            n += 1
+    return n
+
+
+def gate_doctor_referral(
+    callback_context, llm_response: LlmResponse
+) -> Optional[LlmResponse]:
+    """Block premature doctor->radiologist referrals.
+
+    Mirrors `gate_nurse_transfer`: if the doctor tries to hand off to the
+    radiologist before it has conducted at least `_MIN_DOCTOR_HISTORY_TURNS`
+    of focused history-taking, strip the transfer call (keeping any dialogue
+    text) and append a short nudge so the model takes a history first.
+    Returns None to leave the response untouched.
+    """
+    if not _has_transfer_call(llm_response, target="radiologist"):
+        return None
+
+    session = getattr(callback_context, "session", None)
+    if session is None:
+        return None
+    # Events from the response we're evaluating are not yet on the session, so
+    # this counts strictly *prior* doctor turns.
+    if _count_author_text_turns(session, "doctor") >= _MIN_DOCTOR_HISTORY_TURNS:
+        return None
+
+    kept_parts = []
+    for p in llm_response.content.parts:
+        fc = getattr(p, "function_call", None)
+        if fc is not None and fc.name == "transfer_to_agent":
+            args = dict(fc.args or {})
+            if args.get("agent_name") == "radiologist":
+                continue
+        kept_parts.append(p)
+    if not kept_parts:
+        kept_parts = [genai_types.Part(text="")]
+    correction = (
+        "\n\n(Before I order any imaging I should take a proper focused "
+        "history. Let me continue questioning the patient - HPI details, past "
+        "medical history, and relevant social history - before referring to "
+        "radiology.)"
+    )
+    kept_parts.append(genai_types.Part(text=correction))
+
+    return LlmResponse(
+        content=genai_types.Content(role="model", parts=kept_parts),
+        partial=False,
+        turn_complete=True,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Handoff filters (before_model_callback)
 # ---------------------------------------------------------------------------
